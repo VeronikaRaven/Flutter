@@ -1,0 +1,1831 @@
+C:\Users\User\Desktop\german_learning_app\lib\database\database_helper.dart
+
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:path/path.dart';
+import '../models/word.dart';
+import '../models/lesson.dart';
+import '../models/progress.dart';
+
+class DatabaseHelper {
+  static final DatabaseHelper _instance = DatabaseHelper._internal();
+  static Database? _database;
+
+  factory DatabaseHelper() {
+    return _instance;
+  }
+
+  DatabaseHelper._internal();
+
+  Future<Database> get database async {
+    if (_database != null) return _database!;
+    _database = await _initDatabase();
+    return _database!;
+  }
+
+  Future<Database> _initDatabase() async {
+    sqfliteFfiInit();
+    String path = join('.dart_tool', 'german_learning.db');
+    final db = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: _onCreate,
+      ),
+    );
+    await loadPredefinedWords(db);
+    return db;
+  }
+
+  Future<void> _onCreate(Database db, int version) async {
+    print('Создание таблиц...');
+    await db.execute('''
+      CREATE TABLE Words(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        word TEXT,
+        translation TEXT,
+        category TEXT,
+        isFavorite INTEGER,
+        level TEXT
+      )
+    ''');
+    print('Таблица Words создана');
+
+    await db.execute('''
+      CREATE TABLE Lessons(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT,
+        description TEXT,
+        level TEXT
+      )
+    ''');
+    print('Таблица Lessons создана');
+
+    await db.execute('''
+      CREATE TABLE Progress(
+        userId INTEGER PRIMARY KEY,
+        wordsLearned INTEGER,
+        lessonsCompleted INTEGER,
+        testsCompleted INTEGER DEFAULT 0
+      )
+    ''');
+    print('Таблица Progress создана');
+
+    await db.execute('''
+      CREATE TABLE Settings(
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+    print('Таблица Settings создана');
+  }
+
+  final List<Word> predefinedWords = [
+  // Numbers
+  Word(word: 'eins', translation: 'один', category: 'Numbers'),
+  Word(word: 'zwei', translation: 'два', category: 'Numbers'),
+  Word(word: 'drei', translation: 'три', category: 'Numbers'),
+  
+  // Pronouns
+  Word(word: 'ich', translation: 'я', category: 'Pronouns'),
+  Word(word: 'du', translation: 'ты', category: 'Pronouns'),
+  Word(word: 'er', translation: 'он', category: 'Pronouns'),
+  
+  // Colors
+  Word(word: 'rot', translation: 'красный', category: 'Colors'),
+  Word(word: 'blau', translation: 'синий', category: 'Colors'),
+  Word(word: 'grün', translation: 'зелёный', category: 'Colors'),
+  
+  // Food
+  Word(word: 'Brot', translation: 'хлеб', category: 'Food'),
+  Word(word: 'Käse', translation: 'сыр', category: 'Food'),
+  Word(word: 'Wurst', translation: 'колбаса', category: 'Food'),
+  
+  // Fruits
+  Word(word: 'Apfel', translation: 'яблоко', category: 'Fruits'),
+  Word(word: 'Banane', translation: 'банан', category: 'Fruits'),
+  Word(word: 'Orange', translation: 'апельсин', category: 'Fruits'),
+  
+  // Animals
+  Word(word: 'Hund', translation: 'собака', category: 'Animals'),
+  Word(word: 'Katze', translation: 'кошка', category: 'Animals'),
+  Word(word: 'Vogel', translation: 'птица', category: 'Animals'),
+  
+  // Irregular Verbs
+  Word(word: 'sein', translation: 'быть', category: 'Irregular Verbs'),
+  Word(word: 'haben', translation: 'иметь', category: 'Irregular Verbs'),
+  Word(word: 'werden', translation: 'становиться', category: 'Irregular Verbs'),
+];
+
+Future<void> initializeUserProgress(int userId) async {
+  final progress = await getProgress(userId);
+  if (progress == null) {
+    await insertProgress(Progress(
+      userId: userId,
+      wordsLearned: 0,
+      lessonsCompleted: 0,
+    ));
+  }
+}
+  Future<void> loadPredefinedWords(Database db) async {
+    for (var word in predefinedWords) {
+      await db.insert(
+        'Words',
+        word.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+  }
+
+// Сохранение уровня языка
+Future<void> saveLanguageLevel(String level) async {
+  final db = await database;
+  await db.insert(
+    'Settings',
+    {'key': 'languageLevel', 'value': level},
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
+}
+
+// Получение уровня языка
+Future<String?> getLanguageLevel() async {
+  final db = await database;
+  final List<Map<String, dynamic>> maps = await db.query(
+    'Settings',
+    where: 'key = ?',
+    whereArgs: ['languageLevel'],
+  );
+  if (maps.isEmpty) {
+    return null; // Если уровень не установлен
+  }
+  return maps.first['value'];
+}
+
+// Сброс статистики пользователя
+Future<void> resetProgress(int userId) async {
+  final db = await database;
+  await db.delete(
+    'Progress',
+    where: 'userId = ?',
+    whereArgs: [userId],
+  );
+  print('Статистика сброшена для пользователя $userId');
+}
+
+// Удаление аккаунта пользователя
+Future<void> deleteAccount(int userId) async {
+  final db = await database;
+  await db.delete(
+    'Progress',
+    where: 'userId = ?',
+    whereArgs: [userId],
+  );
+  print('Аккаунт удален для пользователя $userId');
+}
+
+  // CRUD операции для Progress
+  Future<void> insertProgress(Progress progress) async {
+    final db = await database;
+    await db.insert('Progress', progress.toMap());
+    print('Прогресс добавлен: ${progress.toMap()}');
+  }
+
+  Future<Progress?> getProgress(int userId) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'Progress',
+      where: 'userId = ?',
+      whereArgs: [userId],
+    );
+
+    if (maps.isEmpty) {
+      print('Прогресс для пользователя $userId не найден');
+      return null;
+    }
+
+    print('Прогресс загружен: ${maps.first}');
+    return Progress.fromMap(maps.first);
+  }
+
+  Future<void> updateProgress(Progress progress) async {
+    final db = await database;
+    await db.update(
+      'Progress',
+      progress.toMap(),
+      where: 'userId = ?',
+      whereArgs: [progress.userId],
+    );
+    print('Прогресс обновлен: ${progress.toMap()}');
+  }
+
+Future<void> incrementLessonsCompleted(int userId) async {
+  final progress = await getProgress(userId);
+  if (progress != null) {
+    final newProgress = Progress(
+      userId: progress.userId,
+      wordsLearned: progress.wordsLearned,
+      lessonsCompleted: progress.lessonsCompleted + 1,
+    );
+    await updateProgress(newProgress);
+    print('Количество завершенных уроков увеличено для пользователя $userId');
+  } else {
+    final newProgress = Progress(
+      userId: userId,
+      wordsLearned: 0,
+      lessonsCompleted: 1,
+    );
+    await insertProgress(newProgress);
+    print('Новый прогресс создан для пользователя $userId');
+  }
+}
+
+  Future<void> deleteProgress(int userId) async {
+    final db = await database;
+    await db.delete(
+      'Progress',
+      where: 'userId = ?',
+      whereArgs: [userId],
+    );
+    print('Прогресс удален для пользователя $userId');
+  }
+
+  Future<void> insertWord(Word word) async {
+    final db = await database;
+    await db.insert(
+      'Words',
+      word.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    print('Слово добавлено: ${word.toMap()}');
+  }
+
+  Future<List<Word>> getWords() async {
+  try {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query('Words');
+    print('Загружены слова: $maps'); // Отладочная печать
+    return List.generate(maps.length, (i) => Word.fromMap(maps[i]));
+  } catch (e) {
+    print('Ошибка при получении слов: $e');
+    rethrow; // Перебрасываем исключение для дальнейшей обработки
+  }
+}
+
+  Future<void> updateWord(Word word) async {
+    final db = await database;
+    await db.update(
+      'Words',
+      word.toMap(),
+      where: 'id = ?',
+      whereArgs: [word.id],
+    );
+    print('Слово обновлено: ${word.toMap()}');
+  }
+
+  Future<void> deleteWord(int id) async {
+    final db = await database;
+    await db.delete(
+      'Words',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    print('Слово удалено с ID: $id');
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\models\lesson.dart
+
+class Lesson {
+  final int? id;
+  final String title;
+  final String description;
+  final String level;
+
+  Lesson({
+    this.id,
+    required this.title,
+    required this.description,
+    required this.level,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'title': title,
+      'description': description,
+      'level': level,
+    };
+  }
+
+  factory Lesson.fromMap(Map<String, dynamic> map) {
+    return Lesson(
+      id: map['id'],
+      title: map['title'],
+      description: map['description'],
+      level: map['level'],
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\models\progress.dart
+
+class Progress {
+  final int userId;
+  final int wordsLearned;
+  final int lessonsCompleted;
+  final int testsCompleted;
+
+  Progress({
+    required this.userId,
+    required this.wordsLearned,
+    required this.lessonsCompleted,
+    this.testsCompleted = 0,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'userId': userId,
+      'wordsLearned': wordsLearned,
+      'lessonsCompleted': lessonsCompleted,
+      'testsCompleted': testsCompleted,
+    };
+  }
+
+  factory Progress.fromMap(Map<String, dynamic> map) {
+    return Progress(
+      userId: map['userId'],
+      wordsLearned: map['wordsLearned'],
+      lessonsCompleted: map['lessonsCompleted'],
+      testsCompleted: map['testsCompleted'] ?? 0,
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\models\word.dart
+
+class Word {
+  final int? id;
+  final String word;
+  final String translation;
+  final String category;
+  bool isFavorite;
+
+  Word({
+    this.id,
+    required this.word,
+    required this.translation,
+    required this.category,
+    this.isFavorite = false,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'word': word,
+      'translation': translation,
+      'category': category,
+      'isFavorite': isFavorite ? 1 : 0, // SQLite хранит логические значения как 0 или 1
+    };
+  }
+
+  factory Word.fromMap(Map<String, dynamic> map) {
+    return Word(
+      id: map['id'],
+      word: map['word'],
+      translation: map['translation'],
+      category: map['category'],
+      isFavorite: map['isFavorite'] == 1, // Преобразование обратно в boolean
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\providers\progress_provider.dart
+
+import 'package:flutter/material.dart';
+
+class CategoryCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const CategoryCard({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(icon, size: 40, color: Colors.blue),
+              const SizedBox(width: 16),
+              Text(
+                title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              const Icon(Icons.chevron_right, color: Colors.grey),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\main.dart
+
+import 'package:flutter/material.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'screens/home_screen.dart';
+
+void main() {
+  // Инициализация sqfliteFfi
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi; // Установка factory для sqflite_common_ffi
+
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'German Learning App',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
+      ),
+      home: HomeScreen(),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\words_screen.dart
+
+import 'package:flutter/material.dart';
+import 'alphabet_screen.dart'; // Алфавит
+import 'irregular_verbs_screen.dart'; // Неправильные глаголы
+import 'numbers_screen.dart'; // Цифры
+import 'colors_screen.dart'; // Цвета
+import 'pronouns_screen.dart'; // Местоимения
+import 'food_screen.dart'; // Еда
+import 'fruits_screen.dart'; // Фрукты
+import 'animals_screen.dart'; // Животные
+
+class WordsScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Слова'),
+      ),
+      body: ListView(
+        children: [
+          _buildCategoryCard(
+            context,
+            title: 'Алфавит',
+            icon: Icons.text_fields,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => AlphabetScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Неправильные глаголы',
+            icon: Icons.edit,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => IrregularVerbsScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Цифры',
+            icon: Icons.format_list_numbered,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => NumbersScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Цвета',
+            icon: Icons.palette,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => ColorsScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Местоимения',
+            icon: Icons.people,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => PronounsScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Еда',
+            icon: Icons.restaurant,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => FoodScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Фрукты',
+            icon: Icons.local_pizza,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => FruitsScreen()),
+            ),
+          ),
+          _buildCategoryCard(
+            context,
+            title: 'Животные',
+            icon: Icons.pets,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => AnimalsScreen()),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryCard(BuildContext context,
+      {required String title, required IconData icon, required VoidCallback onTap}) {
+    return Card(
+      elevation: 4,
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(icon, size: 40, color: Colors.blue),
+              const SizedBox(width: 16),
+              Text(
+                title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              const Icon(Icons.chevron_right, color: Colors.grey),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\tests_screen.dart
+
+import 'package:flutter/material.dart';
+import '../database/database_helper.dart';
+import 'test_category_screen.dart'; // Импортируем созданный экран
+
+class TestsScreen extends StatefulWidget {
+  const TestsScreen({Key? key}) : super(key: key);
+
+  @override
+  _TestsScreenState createState() => _TestsScreenState();
+}
+
+class _TestsScreenState extends State<TestsScreen> {
+  final dbHelper = DatabaseHelper();
+
+  // Список категорий с иконками
+  final List<Map<String, dynamic>> categories = [
+    {'title': 'Цифры', 'icon': Icons.format_list_numbered, 'category': 'Numbers'},
+    {'title': 'Цвета', 'icon': Icons.color_lens, 'category': 'Colors'},
+    {'title': 'Местоимения', 'icon': Icons.people, 'category': 'Pronouns'},
+    {'title': 'Еда', 'icon': Icons.fastfood, 'category': 'Food'},
+    {'title': 'Фрукты', 'icon': Icons.local_offer, 'category': 'Fruits'},
+    {'title': 'Животные', 'icon': Icons.pets, 'category': 'Animals'},
+    {'title': 'Неправильные глаголы', 'icon': Icons.edit, 'category': 'Irregular Verbs'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Тесты'),
+      ),
+      body: ListView.builder(
+        itemCount: categories.length,
+        itemBuilder: (context, index) {
+          final category = categories[index];
+          return Card(
+            margin: EdgeInsets.symmetric(vertical: 8),
+            child: ListTile(
+              leading: Icon(category['icon']),
+              title: Text(category['title']),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => TestCategoryScreen(category: category['category']),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\test_category_screen.dart
+
+import 'package:flutter/material.dart';
+import '../database/database_helper.dart';
+import '../models/word.dart';
+
+class TestCategoryScreen extends StatefulWidget {
+  final String category;
+
+  const TestCategoryScreen({required this.category});
+
+  @override
+  _TestCategoryScreenState createState() => _TestCategoryScreenState();
+}
+
+class _TestCategoryScreenState extends State<TestCategoryScreen> {
+  final dbHelper = DatabaseHelper();
+  List<Word> words = [];
+  List<Word> allWords = [];
+  int score = 0;
+  int currentQuestionIndex = 0;
+  bool isLoading = true;
+  String? errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWords();
+  }
+
+  Future<void> _loadWords() async {
+    try {
+      final loadedWords = await dbHelper.getWords();
+      setState(() {
+        allWords = loadedWords;
+        words = loadedWords
+            .where((word) => word.category == widget.category)
+            .toList();
+
+        if (words.length < 4) {
+          errorMessage =
+              'Для теста нужно минимум 4 слова в категории "${widget.category}"';
+        } else {
+          words = words.take(15).toList(); // Берем максимум 15 слов
+          words.shuffle(); // Перемешиваем вопросы
+        }
+        isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Ошибка загрузки слов: $e';
+        isLoading = false;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> _generateAnswerOptions(Word correctWord) {
+    // Берем 3 случайных слова из той же категории, но не правильный ответ
+    final wrongOptions = allWords
+        .where((word) =>
+            word.category == widget.category && word.id != correctWord.id)
+        .toList()
+      ..shuffle()
+      ..take(3);
+
+    // Смешиваем правильный и неправильные ответы
+    final options = [correctWord, ...wrongOptions]..shuffle();
+
+    return options.map((word) => {
+          'text': word.translation,
+          'isCorrect': word.id == correctWord.id,
+        }).toList();
+  }
+
+  void _nextQuestion(bool isCorrect) {
+    if (isCorrect) {
+      score++;
+    }
+    setState(() {
+      currentQuestionIndex++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Показываем индикатор загрузки, пока данные загружаются
+    if (isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('Тест: ${widget.category}'),
+        ),
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    // Показываем сообщение об ошибке, если что-то пошло не так
+    if (errorMessage != null) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('Тест: ${widget.category}'),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                errorMessage!,
+                style: TextStyle(fontSize: 18, color: Colors.red),
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context); // Возвращаемся на предыдущий экран
+                },
+                child: Text('Вернуться'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Если вопросы закончились, показываем результат
+    if (currentQuestionIndex >= words.length) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('Тест завершен'),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('Результат: $score из ${words.length}'),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: Text('Вернуться'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Основной интерфейс теста
+    final currentWord = words[currentQuestionIndex];
+    final options = _generateAnswerOptions(currentWord);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Тест: ${widget.category}'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Вопрос ${currentQuestionIndex + 1}/${words.length}:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            Text(
+              'Как переводится слово "${currentWord.word}"?',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 20),
+            ...options.map((option) {
+              return ElevatedButton(
+                onPressed: () {
+                  final isCorrect = option['isCorrect'];
+                  _nextQuestion(isCorrect);
+                },
+                child: Text(option['text']),
+              );
+            }).toList(),
+            Spacer(),
+            ElevatedButton(
+              onPressed: () {
+                if (currentQuestionIndex < words.length - 1) {
+                  setState(() {
+                    currentQuestionIndex++;
+                  });
+                }
+              },
+              child: Text('Далее'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\animals_screen.dart
+
+import 'package:flutter/material.dart';
+
+class AnimalsScreen extends StatelessWidget {
+  final List<Map<String, dynamic>> animals = [
+    {'animal': 'Hund', 'translation': '[hʊnt]', 'meaning': 'собака', 'image': 'assets/images/dog.png'},
+    {'animal': 'Katze', 'translation': '[ˈkat͡sə]', 'meaning': 'кошка', 'image': 'assets/images/cat.png'},
+    {'animal': 'Vogel', 'translation': '[ˈfoːɡl̩]', 'meaning': 'птица', 'image': 'assets/images/bird.png'},
+    {'animal': 'Fisch', 'translation': '[fɪʃ]', 'meaning': 'рыба', 'image': 'assets/images/fish.png'},
+    {'animal': 'Maus', 'translation': '[maʊ̯s]', 'meaning': 'мышь', 'image': 'assets/images/mouse.png'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Животные'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: animals.length,
+        itemBuilder: (context, index) {
+          final animal = animals[index];
+          return Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              leading: Image.asset(animal['image']),
+              title: Text(
+                animal['animal'],
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Text('${animal['translation']} - ${animal['meaning']}'),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\colors_screen.dart
+
+import 'package:flutter/material.dart';
+
+class ColorsScreen extends StatelessWidget {
+  final List<Map<String, dynamic>> colors = [
+    {'color': 'rot', 'translation': '[ʁoːt]', 'meaning': 'красный', 'code': Colors.red},
+    {'color': 'blau', 'translation': '[blaʊ̯]', 'meaning': 'синий', 'code': Colors.blue},
+    {'color': 'grün', 'translation': '[ɡʁyːn]', 'meaning': 'зелёный', 'code': Colors.green},
+    {'color': 'gelb', 'translation': '[ɡɛlp]', 'meaning': 'жёлтый', 'code': Colors.yellow},
+    {'color': 'schwarz', 'translation': '[ʃvaʁts]', 'meaning': 'чёрный', 'code': Colors.black},
+    {'color': 'weiß', 'translation': '[vaɪ̯s]', 'meaning': 'белый', 'code': Colors.white},
+    {'color': 'orange', 'translation': '[oˈʁaŋə]', 'meaning': 'оранжевый', 'code': Colors.orange},
+    {'color': 'lila', 'translation': '[ˈliːla]', 'meaning': 'фиолетовый', 'code': Colors.purple},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Цвета'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: colors.length,
+        itemBuilder: (context, index) {
+          final color = colors[index];
+          return Card(
+            color: color['code'],
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              title: Text(
+                color['color'],
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: color['code'] == Colors.black ? Colors.white : Colors.black,
+                ),
+              ),
+              subtitle: Text(
+                '${color['translation']} - ${color['meaning']}',
+                style: TextStyle(
+                  color: color['code'] == Colors.black ? Colors.white : Colors.black,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\dictionary_screen.dart
+
+import 'package:flutter/material.dart';
+import '../database/database_helper.dart';
+import '../models/word.dart';
+
+class DictionaryScreen extends StatefulWidget {
+  const DictionaryScreen({Key? key}) : super(key: key);
+
+  @override
+  _DictionaryScreenState createState() => _DictionaryScreenState();
+}
+
+class _DictionaryScreenState extends State<DictionaryScreen> {
+  final dbHelper = DatabaseHelper();
+  List<Word> words = [];
+  List<Word> favoriteWords = [];
+  String? selectedCategory;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWords();
+  }
+
+  Future<void> _loadWords() async {
+    final allWords = await dbHelper.getWords();
+    final favWords = allWords.where((word) => word.isFavorite).toList();
+    setState(() {
+      favoriteWords = favWords;
+      if (selectedCategory != null) {
+        words = allWords.where((word) => word.category == selectedCategory).toList();
+      } else {
+        words = allWords;
+      }
+    });
+  }
+
+  void _selectCategory(String? category) {
+    setState(() {
+      selectedCategory = category;
+    });
+    _loadWords();
+  }
+
+  Future<void> _addWord() async {
+    final wordController = TextEditingController();
+    final translationController = TextEditingController();
+    final categoryController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Добавить слово'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: wordController, decoration: InputDecoration(labelText: 'Слово')),
+            TextField(controller: translationController, decoration: InputDecoration(labelText: 'Перевод')),
+            TextField(controller: categoryController, decoration: InputDecoration(labelText: 'Категория')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Отмена')),
+          ElevatedButton(
+            onPressed: () async {
+              final newWord = Word(
+                word: wordController.text,
+                translation: translationController.text,
+                category: categoryController.text,
+              );
+              await dbHelper.insertWord(newWord);
+              _loadWords();
+              Navigator.pop(context);
+            },
+            child: Text('Добавить'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editWord(Word word) async {
+    final wordController = TextEditingController(text: word.word);
+    final translationController = TextEditingController(text: word.translation);
+    final categoryController = TextEditingController(text: word.category);
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Редактировать слово'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: wordController, decoration: InputDecoration(labelText: 'Слово')),
+            TextField(controller: translationController, decoration: InputDecoration(labelText: 'Перевод')),
+            TextField(controller: categoryController, decoration: InputDecoration(labelText: 'Категория')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: Text('Отмена')),
+          ElevatedButton(
+            onPressed: () async {
+              final updatedWord = Word(
+                id: word.id,
+                word: wordController.text,
+                translation: translationController.text,
+                category: categoryController.text,
+                isFavorite: word.isFavorite,
+              );
+              await dbHelper.updateWord(updatedWord);
+              _loadWords();
+              Navigator.pop(context);
+            },
+            child: Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteWord(int id) async {
+    await dbHelper.deleteWord(id);
+    _loadWords();
+  }
+
+  void _toggleFavorite(Word word) async {
+    final updatedWord = Word(
+      id: word.id,
+      word: word.word,
+      translation: word.translation,
+      category: word.category,
+      isFavorite: !word.isFavorite,
+    );
+    await dbHelper.updateWord(updatedWord);
+    _loadWords();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Словарь'),
+          bottom: TabBar(
+            tabs: [
+              Tab(text: 'Все слова'),
+              Tab(text: 'Избранное'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            // Все слова
+            ListView.builder(
+              itemCount: words.length,
+              itemBuilder: (context, index) {
+                final word = words[index];
+                return ListTile(
+                  title: Text(word.word),
+                  subtitle: Text('${word.translation} (${word.category})'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          word.isFavorite ? Icons.favorite : Icons.favorite_border,
+                          color: word.isFavorite ? Colors.red : null,
+                        ),
+                        onPressed: () => _toggleFavorite(word),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.edit),
+                        onPressed: () => _editWord(word),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete),
+                        onPressed: () => _deleteWord(word.id!),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            // Избранные слова
+            ListView.builder(
+              itemCount: favoriteWords.length,
+              itemBuilder: (context, index) {
+                final word = favoriteWords[index];
+                return ListTile(
+                  title: Text(word.word),
+                  subtitle: Text('${word.translation} (${word.category})'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(Icons.favorite, color: Colors.red),
+                        onPressed: () => _toggleFavorite(word),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete),
+                        onPressed: () => _deleteWord(word.id!),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _addWord,
+          child: Icon(Icons.add),
+        ),
+      ),
+    );
+  }
+}
+C:\Users\User\Desktop\german_learning_app\lib\screens\food_screen.dart
+import 'package:flutter/material.dart';
+
+class FoodScreen extends StatelessWidget {
+  final List<Map<String, dynamic>> foods = [
+    {
+      'food': 'Apfel',
+      'translation': '[ˈap͡fl̩]',
+      'meaning': 'яблоко',
+      'image': 'assets/images/apple.png'
+    },
+    {
+      'food': 'Brot',
+      'translation': '[bʁoːt]',
+      'meaning': 'хлеб',
+      'image': 'assets/images/bread.png'
+    },
+    {
+      'food': 'Käse',
+      'translation': '[kɛːzə]',
+      'meaning': 'сыр',
+      'image': 'assets/images/cheese.png'
+    },
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Еда'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: foods.length,
+        itemBuilder: (context, index) {
+          final food = foods[index];
+          return Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              leading: Image.asset(food['image']),
+              title: Text(
+                food['food'],
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Text('${food['translation']} - ${food['meaning']}'),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\fruits_screen.dart
+
+import 'package:flutter/material.dart';
+
+class FruitsScreen extends StatelessWidget {
+  final List<Map<String, dynamic>> fruits = [
+    {'fruit': 'Banane', 'translation': '[baˈnaːnə]', 'meaning': 'банан', 'image': 'assets/images/banana.png'},
+    {'fruit': 'Orange', 'translation': '[oˈʁaŋə]', 'meaning': 'апельсин', 'image': 'assets/images/orange.png'},
+    {'fruit': 'Erdbeere', 'translation': '[ˈeːɐ̯tˌbeːʁə]', 'meaning': 'клубника', 'image': 'assets/images/strawberry.png'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Фрукты'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: fruits.length,
+        itemBuilder: (context, index) {
+          final fruit = fruits[index];
+          return Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              leading: Image.asset(fruit['image']),
+              title: Text(
+                fruit['fruit'],
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Text('${fruit['translation']} - ${fruit['meaning']}'),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\home_screen.dart
+
+import 'package:flutter/material.dart';
+import '../database/database_helper.dart';
+import 'main_app_screen.dart';
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final dbHelper = DatabaseHelper();
+  String? selectedLevel;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLanguageLevel();
+  }
+
+  Future<void> _loadLanguageLevel() async {
+    final level = await dbHelper.getLanguageLevel();
+    if (level != null) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => MainAppScreen(selectedLevel: level)),
+      );
+    }
+  }
+
+  void _navigateToMainApp(BuildContext context) {
+    if (selectedLevel != null) {
+      dbHelper.saveLanguageLevel(selectedLevel!);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MainAppScreen(selectedLevel: selectedLevel!),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Пожалуйста, выберите уровень')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Выбор уровня'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            DropdownButton<String>(
+              value: selectedLevel,
+              hint: Text('Выберите уровень'),
+              items: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2']
+                  .map((level) => DropdownMenuItem(
+                        value: level,
+                        child: Text(level),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  selectedLevel = value;
+                });
+              },
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => _navigateToMainApp(context),
+              child: Text('Начать обучение'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\irregular_verbs_screen.dart
+
+import 'package:flutter/material.dart';
+
+class IrregularVerbsScreen extends StatelessWidget {
+  final List<Map<String, String>> verbs = [
+    {
+      'verb': 'sein',
+      'translation': 'быть',
+      'conjugation': 'ich bin, du bist, er/sie/es ist',
+    },
+    {
+      'verb': 'haben',
+      'translation': 'иметь',
+      'conjugation': 'ich habe, du hast, er/sie/es hat',
+    },
+    {
+      'verb': 'werden',
+      'translation': 'становиться',
+      'conjugation': 'ich werde, du wirst, er/sie/es wird',
+    },
+    {
+      'verb': 'gehen',
+      'translation': 'идти',
+      'conjugation': 'ich gehe, du gehst, er/sie/es geht',
+    },
+    {
+      'verb': 'kommen',
+      'translation': 'приходить',
+      'conjugation': 'ich komme, du kommst, er/sie/es kommt',
+    },
+    {
+      'verb': 'machen',
+      'translation': 'делать',
+      'conjugation': 'ich mache, du machst, er/sie/es macht',
+    },
+    {
+      'verb': 'lesen',
+      'translation': 'читать',
+      'conjugation': 'ich lese, du liest, er/sie/es liest',
+    },
+    {
+      'verb': 'essen',
+      'translation': 'есть',
+      'conjugation': 'ich esse, du isst, er/sie/es isst',
+    },
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Неправильные глаголы'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: verbs.length,
+        itemBuilder: (context, index) {
+          final verb = verbs[index];
+          return Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              leading: Icon(Icons.edit, color: Colors.blue),
+              title: Text(
+                verb['verb']!,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Перевод: ${verb['translation']}'),
+                  Text('Склонение: ${verb['conjugation']}'),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\main_app_screen.dart
+
+import 'package:flutter/material.dart';
+import 'words_screen.dart'; // Экран всех слов
+import 'dictionary_screen.dart'; // Экран словаря
+import 'tests_screen.dart'; // Экран тестов
+import 'profile_screen.dart'; // Экран профиля
+
+class MainAppScreen extends StatelessWidget {
+  final String selectedLevel;
+
+  MainAppScreen({required this.selectedLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 4, // Количество вкладок
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text('Уровень: $selectedLevel'),
+          bottom: TabBar(
+            isScrollable: true, // Вкладки можно прокручивать
+            tabs: [
+              Tab(text: 'Алфавит'), // Текстовая вкладка
+              Tab(text: 'Словарь'), // Текстовая вкладка
+              Tab(text: 'Тесты'), // Текстовая вкладка
+              Tab(text: 'Профиль'), // Текстовая вкладка
+            ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            WordsScreen(), // Экран всех слов
+            DictionaryScreen(), // Экран словаря
+            TestsScreen(), // Экран тестов
+            ProfileScreen(), // Экран профиля
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\numbers_screen.dart
+
+import 'package:flutter/material.dart';
+
+class NumbersScreen extends StatelessWidget {
+  final List<Map<String, String>> numbers = [
+    {'number': 'null', 'translation': '[nul]', 'meaning': 'ноль'},
+    {'number': 'eins', 'translation': '[ains]', 'meaning': 'один'},
+    {'number': 'zwei', 'translation': '[tsvai]', 'meaning': 'два'},
+    {'number': 'drei', 'translation': '[drai]', 'meaning': 'три'},
+    {'number': 'vier', 'translation': '[fiːɐ̯]', 'meaning': 'четыре'},
+    {'number': 'fünf', 'translation': '[fʏnf]', 'meaning': 'пять'},
+    {'number': 'sechs', 'translation': '[zɛks]', 'meaning': 'шесть'},
+    {'number': 'sieben', 'translation': '[ˈziːbn̩]', 'meaning': 'семь'},
+    {'number': 'acht', 'translation': '[axt]', 'meaning': 'восемь'},
+    {'number': 'neun', 'translation': '[nɔɪ̯n]', 'meaning': 'девять'},
+    {'number': 'zehn', 'translation': '[tseːn]', 'meaning': 'десять'},
+    {'number': 'zwanzig', 'translation': '[ˈtsvantsɪç]', 'meaning': 'двадцать'},
+    {'number': 'dreißig', 'translation': '[ˈdʁaɪ̯sɪç]', 'meaning': 'тридцать'},
+    {'number': 'fünfzig', 'translation': '[ˈfʏnftsɪç]', 'meaning': 'пятьдесят'},
+    {'number': 'hundert', 'translation': '[ˈhʊndɐt]', 'meaning': 'сто'},
+    {'number': 'einhunderteins', 'translation': '[ainhʊndɐtaɪ̯ns]', 'meaning': 'сто один'},
+    {'number': 'fünfhundert', 'translation': '[ˈfʏnfhʊndɐt]', 'meaning': 'пятьсот'},
+    {'number': 'tausend', 'translation': '[ˈtaʊ̯znt]', 'meaning': 'тысяча'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Цифры'),
+        backgroundColor: Colors.blue,
+      ),
+      body: ListView.builder(
+        itemCount: numbers.length,
+        itemBuilder: (context, index) {
+          final number = numbers[index];
+          return Card(
+            elevation: 4,
+            margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+            child: ListTile(
+              leading: Icon(Icons.format_list_numbered, color: Colors.blue),
+              title: Text(
+                number['number']!,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              subtitle: Text('${number['translation']} - ${number['meaning']}'),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\profile_screen.dart
+
+import 'package:flutter/material.dart';
+import '../database/database_helper.dart';
+import '../models/progress.dart';
+
+class ProfileScreen extends StatefulWidget {
+  @override
+  _ProfileScreenState createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final dbHelper = DatabaseHelper();
+  Progress? progress;
+  String? selectedLevel;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    await _loadProgress();
+    await _loadLanguageLevel();
+  }
+
+  Future<void> _loadProgress() async {
+    final loadedProgress = await dbHelper.getProgress(1); // UserID = 1
+    setState(() {
+      progress = loadedProgress;
+    });
+  }
+
+  Future<void> _loadLanguageLevel() async {
+    final level = await dbHelper.getLanguageLevel();
+    setState(() {
+      selectedLevel = level;
+    });
+  }
+
+  double _calculateSuccessRate() {
+    if (progress == null || progress!.lessonsCompleted == 0) {
+      return 0.0;
+    }
+    return (progress!.wordsLearned / progress!.lessonsCompleted) * 100;
+  }
+
+  void _resetStatistics() async {
+    await dbHelper.resetProgress(1); // UserID = 1
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Статистика успешно сброшена')),
+    );
+    _loadProgress();
+  }
+
+  void _deleteAccount() async {
+    await dbHelper.deleteAccount(1); // UserID = 1
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Аккаунт успешно удален')),
+    );
+    _loadProgress();
+  }
+
+  void _resetLanguageLevel() async {
+    await dbHelper.saveLanguageLevel('');
+    setState(() {
+      selectedLevel = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Уровень языка сброшен')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Профиль'),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Language Level Section
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Текущий уровень',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 10),
+                      Text(
+                        selectedLevel != null
+                            ? 'Уровень: $selectedLevel'
+                            : 'Уровень не выбран',
+                        style: TextStyle(fontSize: 18),
+                      ),
+                      SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _resetLanguageLevel,
+                        child: Text('Сбросить уровень'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              SizedBox(height: 20),
+
+              // Progress Statistics Section
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Статистика прогресса',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 10),
+                      if (progress != null) ...[
+                        Text(
+                          'Пройдено тестов: ${progress!.lessonsCompleted}',
+                          style: TextStyle(fontSize: 18),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          'Выучено слов: ${progress!.wordsLearned}',
+                          style: TextStyle(fontSize: 18),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          'Процент успешности: ${_calculateSuccessRate().toStringAsFixed(2)}%',
+                          style: TextStyle(fontSize: 18),
+                        ),
+                      ] else
+                        Text('Нет данных о прогрессе'),
+                      SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _resetStatistics,
+                        child: Text('Сбросить статистику'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              SizedBox(height: 20),
+
+              // Account Management Section
+              Card(
+                color: Colors.red[50],
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Управление аккаунтом',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red,
+                        ),
+                      ),
+                      SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _deleteAccount,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
+                        child: Text('Удалить аккаунт'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\pronouns_screen.dart
+
+import 'package:flutter/material.dart';
+
+class PronounsScreen extends StatelessWidget {
+  final List<Map<String, String>> pronouns = [
+    {'pronoun': 'ich', 'translation': 'я'},
+    {'pronoun': 'du', 'translation': 'ты'},
+    {'pronoun': 'er', 'translation': 'он'},
+    {'pronoun': 'sie', 'translation': 'она'},
+    {'pronoun': 'es', 'translation': 'оно'},
+    {'pronoun': 'wir', 'translation': 'мы'},
+    {'pronoun': 'ihr', 'translation': 'вы (множественное число)'},
+    {'pronoun': 'sie', 'translation': 'они'},
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Местоимения'),
+      ),
+      body: ListView.builder(
+        itemCount: pronouns.length,
+        itemBuilder: (context, index) {
+          final pronoun = pronouns[index];
+          return ListTile(
+            title: Text(pronoun['pronoun']!),
+            subtitle: Text(pronoun['translation']!),
+          );
+        },
+      ),
+    );
+  }
+}
+
+C:\Users\User\Desktop\german_learning_app\lib\screens\settings_screen.dart
+
+import 'package:flutter/material.dart';
+import 'dictionary_screen.dart';
+import 'tests_screen.dart';
+import 'profile_screen.dart';
+
+class WordsScreen extends StatefulWidget {
+  final String selectedLevel;
+
+  WordsScreen({required this.selectedLevel});
+
+  @override
+  _WordsScreenState createState() => _WordsScreenState();
+}
+
+class _WordsScreenState extends State<WordsScreen> {
+  int _selectedIndex = 0;
+
+  static final List<Widget> _widgetOptions = <Widget>[
+  Text('Слова'),
+  DictionaryScreen(),
+  TestsScreen(),
+  ProfileScreen(),
+];
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Уровень: ${widget.selectedLevel}'),
+      ),
+      body: Center(
+        child: _widgetOptions.elementAt(_selectedIndex),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        items: const <BottomNavigationBarItem>[
+          BottomNavigationBarItem(
+            icon: Icon(Icons.book),
+            label: 'Слова',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.library_books),
+            label: 'Словарь',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.quiz),
+            label: 'Тесты',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Профиль',
+          ),
+        ],
+      ),
+    );
+  }
+}
